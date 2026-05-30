@@ -1,51 +1,58 @@
 import { uploadFile, downloadFile } from '@huggingface/hub';
 import { retry } from '../utils/retry.js';
 
+const BUCKET_REPO = {
+  type: 'bucket',
+  name: process.env.HF_BUCKET_NAME
+};
+
 const HF_TOKEN = process.env.HF_TOKEN;
-const HF_BUCKET_NAME = process.env.HF_BUCKET_NAME;
 
-if (!HF_TOKEN || !HF_BUCKET_NAME) {
-  throw new Error('Missing required environment variables: HF_TOKEN, HF_BUCKET_NAME');
-}
-
-const BUCKET_REPO = { type: 'bucket', name: HF_BUCKET_NAME };
-
-export async function readJSON(path) {
-  return retry(async () => {
-    try {
-      const res = await downloadFile({
-        repo: BUCKET_REPO,
-        path,
-        accessToken: HF_TOKEN
-      });
-
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to download ${path}`);
-
-      const text = await res.text();
-      return JSON.parse(text);
-    } catch (err) {
-      if (err.status === 404 || err.statusCode === 404 || err.message?.includes('404')) {
-        return null;
-      }
-      throw err;
-    }
-  });
-}
-
+/**
+ * Writes JSON data safely to the Hugging Face Storage Bucket
+ */
 export async function writeJSON(path, data) {
+  if (!HF_TOKEN || !process.env.HF_BUCKET_NAME) {
+    throw new Error('Missing required environment variables: HF_TOKEN or HF_BUCKET_NAME');
+  }
+
   return retry(async () => {
-    // EFFICIENCY FIX: Removed 'null, 2' line indentation. Minifying the stringified
-    // object cuts computing overhead, scales faster, and prevents wasting bucket space.
     const blob = new Blob([JSON.stringify(data)], {
       type: 'application/json'
     });
 
+    // FIXED: Formatted the file configuration using an object wrapper containing path and content
     await uploadFile({
       repo: BUCKET_REPO,
-      path,
-      file: blob,
+      accessToken: HF_TOKEN,
+      file: {
+        path: path,
+        content: blob
+      }
+    });
+  });
+}
+
+/**
+ * Reads JSON data from the Hugging Face Storage Bucket
+ */
+export async function readJSON(path) {
+  if (!HF_TOKEN || !process.env.HF_BUCKET_NAME) {
+    throw new Error('Missing required environment variables: HF_TOKEN or HF_BUCKET_NAME');
+  }
+
+  return retry(async () => {
+    const response = await downloadFile({
+      repo: BUCKET_REPO,
+      path: path,
       accessToken: HF_TOKEN
     });
+
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error(`Failed to read from bucket: ${response.statusText}`);
+    }
+
+    return await response.json();
   });
 }
