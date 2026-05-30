@@ -4,9 +4,19 @@ import { getCached } from './storage/cache.js';
 export default async function router(req, res, pathname, body) {
   res.setHeader('Content-Type', 'application/json');
 
-  // New Storage Test Endpoint
+  // Safely isolate URL query search parameters
+  const urlObj = new URL(req.url, 'http://localhost');
+  const querySecret = urlObj.searchParams.get('secret');
+
+  // Secure Storage Test Endpoint
   if (pathname === '/test-storage' && req.method === 'GET') {
     try {
+      // Lock check: block anyone who doesn't provide the valid API_SECRET key query string
+      if (!process.env.API_SECRET || querySecret !== process.env.API_SECRET) {
+        res.writeHead(401);
+        return res.end(JSON.stringify({ error: 'Unauthorized test access' }));
+      }
+
       console.log('[Test] Starting Bucket Storage self-test...');
       
       const testPayload = { 
