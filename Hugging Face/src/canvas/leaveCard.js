@@ -1,5 +1,5 @@
 import { Canvas, loadImage } from 'skia-canvas';
-import { readJSON } from '../storage/hfClient.js'; // Imported to retain architecture integrity
+import { readJSON } from '../storage/hfClient.js';
 import path from 'path';
 
 const defaultBackgrounds = new Map();
@@ -23,7 +23,7 @@ export async function generateLeaveCard({ avatarURL, username, serverName, membe
   let bg = defaultBackgrounds.get('default1');
 
   if (config && DEFAULT_BG_KEYS.includes(leaveBackground)) {
-    bg = defaultBackgrounds.get(leaveBackground) || defaultBackgrounds.get('default1');
+    bg = defaultBackgrounds.get(leaveBackground);
   } else if (leaveBackground === 'custom' && guildId) {
     if (!customCache.has(guildId)) {
       try {
@@ -53,7 +53,7 @@ export async function generateLeaveCard({ avatarURL, username, serverName, membe
           throw new Error(`Bucket returned status ${res.status}`);
         }
       } catch (err) {
-        console.warn(`[canvas/leaveCard] Custom background fetch failed, falling back to default1: ${err.message}`);
+        console.warn(`[canvas/leaveCard] Custom background fetch failed: ${err.message}`);
       }
     } else {
       bg = customCache.get(guildId);
@@ -63,8 +63,14 @@ export async function generateLeaveCard({ avatarURL, username, serverName, membe
   const canvas = new Canvas(800, 200);
   const ctx = canvas.getContext('2d');
 
-  // 1. Background image scaled to fill full 800x200
-  ctx.drawImage(bg, 0, 0, 800, 200);
+  // 1. Background image layer with automated safety switch
+  if (bg) {
+    ctx.drawImage(bg, 0, 0, 800, 200);
+  } else {
+    // Elegant dark fill fallback if image files aren't physically present yet
+    ctx.fillStyle = '#1e1f22';
+    ctx.fillRect(0, 0, 800, 200);
+  }
 
   // 2. Dark overlay rgba(0,0,0,0.55) fillRect full canvas
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -84,7 +90,7 @@ export async function generateLeaveCard({ avatarURL, username, serverName, membe
     ctx.drawImage(avatar, 40, 30, 140, 140);
     ctx.restore();
   } catch (avatarErr) {
-    console.warn(`[canvas/leaveCard] Failed loading avatar, drawing empty circle wrapper: ${avatarErr.message}`);
+    console.warn(`[canvas/leaveCard] Failed loading avatar, drawing empty backup circle: ${avatarErr.message}`);
   }
 
   ctx.beginPath();
