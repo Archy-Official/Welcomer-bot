@@ -1,5 +1,5 @@
 import { Canvas, loadImage } from 'skia-canvas';
-import { readJSON } from '../storage/hfClient.js'; // Imported to retain architecture integrity
+import { readJSON } from '../storage/hfClient.js';
 import path from 'path';
 
 const defaultBackgrounds = new Map();
@@ -18,11 +18,11 @@ await Promise.all(DEFAULT_BG_KEYS.map(async (key) => {
 }));
 
 export async function generateWelcomeCard({ avatarURL, username, serverName, memberCount, config }) {
-  const { welcomeBackground, cardTextColor, cardAccentColor, guildId } = config;
-  let bg = defaultBackgrounds.get('default1'); // Fallback default
+  const { welcomeBackground, cardTextColor, cardAccentColor, guildId } = config || {};
+  let bg = defaultBackgrounds.get('default1'); // Fallback default map variable
 
-  if (DEFAULT_BG_KEYS.includes(welcomeBackground)) {
-    bg = defaultBackgrounds.get(welcomeBackground) || defaultBackgrounds.get('default1');
+  if (config && DEFAULT_BG_KEYS.includes(welcomeBackground)) {
+    bg = defaultBackgrounds.get(welcomeBackground);
   } else if (welcomeBackground === 'custom' && guildId) {
     if (!customCache.has(guildId)) {
       try {
@@ -36,7 +36,6 @@ export async function generateWelcomeCard({ avatarURL, username, serverName, mem
           redirect: 'manual'
         });
 
-        // Safe S3 cross-origin redirection handling
         if (res.status === 302 || res.status === 307) {
           const s3Url = res.headers.get('location');
           if (s3Url) {
@@ -53,7 +52,7 @@ export async function generateWelcomeCard({ avatarURL, username, serverName, mem
           throw new Error(`Bucket returned status ${res.status}`);
         }
       } catch (err) {
-        console.warn(`[canvas/welcomeCard] Custom background fetch failed, falling back to default1: ${err.message}`);
+        console.warn(`[canvas/welcomeCard] Custom background fetch failed: ${err.message}`);
       }
     } else {
       bg = customCache.get(guildId);
@@ -63,15 +62,21 @@ export async function generateWelcomeCard({ avatarURL, username, serverName, mem
   const canvas = new Canvas(800, 200);
   const ctx = canvas.getContext('2d');
 
-  // 1. Background image scaled to fill full 800x200
-  ctx.drawImage(bg, 0, 0, 800, 200);
+  // 1. Background image layer with automated safety switch
+  if (bg) {
+    ctx.drawImage(bg, 0, 0, 800, 200);
+  } else {
+    // If local asset files are missing, paint a sleek premium charcoal background instead of crashing
+    ctx.fillStyle = '#1e1f22'; 
+    ctx.fillRect(0, 0, 800, 200);
+  }
 
   // 2. Dark overlay rgba(0,0,0,0.45) fillRect full canvas
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(0, 0, 800, 200);
 
   // 3. Accent bar
-  ctx.fillStyle = cardAccentColor || '#ffffff';
+  ctx.fillStyle = cardAccentColor || '#5865F2';
   ctx.fillRect(0, 0, 6, 200);
 
   // 4. Avatar circle
@@ -84,18 +89,18 @@ export async function generateWelcomeCard({ avatarURL, username, serverName, mem
     ctx.drawImage(avatar, 40, 30, 140, 140);
     ctx.restore();
   } catch (avatarErr) {
-    console.warn(`[canvas/welcomeCard] Failed loading avatar, drawing empty circle wrapper: ${avatarErr.message}`);
+    console.warn(`[canvas/welcomeCard] Failed loading avatar, drawing empty backup circle: ${avatarErr.message}`);
   }
 
   ctx.beginPath();
   ctx.arc(110, 100, 70, 0, Math.PI * 2);
-  ctx.strokeStyle = cardAccentColor || '#ffffff';
+  ctx.strokeStyle = cardAccentColor || '#5865F2';
   ctx.lineWidth = 4;
   ctx.stroke();
 
   // 5. Server name
   ctx.font = 'bold 15px DejaVu Sans';
-  ctx.fillStyle = cardAccentColor || '#ffffff';
+  ctx.fillStyle = cardAccentColor || '#5865F2';
   ctx.fillText((serverName || 'SERVER').toUpperCase(), 200, 70);
 
   // 6. Username
