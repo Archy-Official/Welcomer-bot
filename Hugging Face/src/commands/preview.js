@@ -11,21 +11,25 @@ async function patchWebhook(clientId, token, payload, fileBuffer = null, fileNam
   
   if (fileBuffer && fileName) {
     const formData = new FormData();
-    formData.append('payload_json', JSON.stringify(payload));
-    formData.append('file', new Blob([fileBuffer], { type: 'image/png' }), fileName);
+    // Inject image attachment reference into the layout object dynamically
+    if (payload.embeds && payload.embeds[0]) {
+      payload.embeds[0].image = { url: `attachment://${fileName}` };
+    }
     
-    const response = await fetch(url, {
+    formData.append('payload_json', JSON.stringify(payload));
+    // CRITICAL FIX: Changed 'file' to 'files[0]' for Discord compliance
+    formData.append('files[0]', new Blob([fileBuffer], { type: 'image/png' }), fileName);
+    
+    return await fetch(url, {
       method: 'PATCH',
       body: formData
     });
-    return response;
   } else {
-    const response = await fetch(url, {
+    return await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    return response;
   }
 }
 
@@ -66,11 +70,9 @@ async function getConfig(guildId) {
 export default async function handlePreview(interaction) {
   const { guild_id: guildId, member, data, token } = interaction;
   const clientId = process.env.DISCORD_CLIENT_ID;
-  
   const subcommand = data.options?.[0]?.name;
   
   let config = await getConfig(guildId);
-  
   const user = member.user;
   const avatarUrl = user.avatar 
     ? `${DISCORD_CDN}/avatars/${user.id}/${user.avatar}.png?size=256`
@@ -80,10 +82,9 @@ export default async function handlePreview(interaction) {
   let memberCount = 1;
   
   try {
-    const guildResponse = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-      headers: {
-        'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`
-      }
+    // CRITICAL FIX: Appended ?with_counts=true to receive metric telemetry details
+    const guildResponse = await fetch(`https://discord.com/api/v10/guilds/${guildId}?with_counts=true`, {
+      headers: { 'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}` }
     });
     if (guildResponse.ok) {
       const guildData = await guildResponse.json();
@@ -134,7 +135,7 @@ export default async function handlePreview(interaction) {
     await patchWebhook(
       clientId,
       token,
-      createEmbed(embedTitle, 'Here is your card preview.'),
+      createEmbed(embedTitle, 'Here is your active design build rendering:'),
       imageBuffer,
       'preview.png'
     );
