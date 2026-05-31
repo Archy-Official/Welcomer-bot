@@ -7,23 +7,16 @@ const MANAGE_GUILD = 32n;
 
 async function patchWebhook(clientId, token, payload) {
   const url = `${WEBHOOK_BASE}/${clientId}/${token}/messages/@original`;
-  const response = await fetch(url, {
+  return await fetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  return response;
 }
 
 function createEmbed(title, description, fields = [], color = EMBED_COLOR) {
   return {
-    embeds: [{
-      title,
-      description,
-      fields,
-      color,
-      timestamp: new Date().toISOString()
-    }]
+    embeds: [{ title, description, fields, color, timestamp: new Date().toISOString() }]
   };
 }
 
@@ -33,29 +26,18 @@ function hasManageGuild(interaction) {
 }
 
 async function getConfig(guildId) {
-  try {
-    return await readJSON(`guilds/${guildId}/config.json`);
-  } catch {
+  try { return await readJSON(`guilds/${guildId}/config.json`); } 
+  catch {
     return {
-      guildId,
-      welcomeChannelId: null,
-      leaveChannelId: null,
-      autoRoles: [],
+      guildId, welcomeChannelId: null, leaveChannelId: null, autoRoles: [],
       welcomeMessage: '{username} just joined {server}!',
       leaveMessage: '{username} has left {server}.',
-      dmMessage: 'Welcome to {server}!',
-      dmEnabled: false,
-      welcomeBackground: 'default1',
-      leaveBackground: 'default1',
-      cardTextColor: '#ffffff',
-      cardAccentColor: '#5865F2',
+      dmMessage: 'Welcome to {server}!', dmEnabled: false,
+      welcomeBackground: 'default1', leaveBackground: 'default1',
+      cardTextColor: '#ffffff', cardAccentColor: '#5865F2',
       createdAt: new Date().toISOString()
     };
   }
-}
-
-async function saveConfig(guildId, config) {
-  await writeJSON(`guilds/${guildId}/config.json`, config);
 }
 
 export default async function handleLeaveBackground(interaction) {
@@ -63,94 +45,61 @@ export default async function handleLeaveBackground(interaction) {
   const clientId = process.env.DISCORD_CLIENT_ID;
   
   if (!hasManageGuild(interaction)) {
-    await patchWebhook(clientId, token, createEmbed(
-      'Permission Denied',
-      'You need the **Manage Server** permission to use this command.'
-    ));
+    await patchWebhook(clientId, token, createEmbed('Permission Denied', 'You need the **Manage Server** permission to use this command.'));
     return;
   }
   
   const subcommand = data.options?.[0]?.name;
   const options = data.options?.[0]?.options || [];
-  const getOption = (name) => options.find(o => o.name === name)?.value;
+  const style = options.find(o => o.name === 'style')?.value;
+  const attachmentId = options.find(o => o.name === 'file')?.value;
   
   let config = await getConfig(guildId);
   
   switch (subcommand) {
     case 'default': {
-      const style = getOption('style');
       if (!style || !['default1', 'default2', 'default3'].includes(style)) {
-        await patchWebhook(clientId, token, createEmbed(
-          'Invalid Style',
-          'Please choose one of: `default1`, `default2`, `default3`'
-        ));
+        await patchWebhook(clientId, token, createEmbed('Invalid Style', 'Choose: `default1`, `default2`, or `default3`'));
         return;
       }
-      
       config.leaveBackground = style;
-      await saveConfig(guildId, config);
-      
-      await patchWebhook(clientId, token, createEmbed(
-        'Background Updated',
-        `Leave card background set to **${style}**.`
-      ));
+      await writeJSON(`guilds/${guildId}/config.json`, config);
+      await patchWebhook(clientId, token, createEmbed('Background Updated', `Leave card background set to **${style}**.`));
       break;
     }
     
     case 'upload': {
-      const attachmentId = getOption('file');
       if (!attachmentId) {
-        await patchWebhook(clientId, token, createEmbed(
-          'No File Provided',
-          'Please attach an image file to upload.'
-        ));
+        await patchWebhook(clientId, token, createEmbed('No File Provided', 'Please attach an image file.'));
         return;
       }
       
       const attachments = interaction.data.resolved?.attachments || {};
       const attachment = attachments[attachmentId];
       if (!attachment) {
-        await patchWebhook(clientId, token, createEmbed(
-          'Invalid Attachment',
-          'Could not find the specified attachment.'
-        ));
+        await patchWebhook(clientId, token, createEmbed('Invalid Attachment', 'Could not locate attachment metadata.'));
         return;
       }
       
       try {
         const response = await fetch(attachment.url);
         const arrayBuffer = await response.arrayBuffer();
-        const blob = new Blob([arrayBuffer], { type: attachment.content_type || 'image/png' });
         
         await uploadFile({
-          repo: process.env.HF_REPO || '',
+          repo: { type: 'space', id: process.env.HF_REPO_ID || process.env.SPACE_ID },
           pathInRepo: `guilds/${guildId}/background-leave.png`,
-          file: blob,
+          file: arrayBuffer,
           accessToken: process.env.HF_TOKEN
         });
         
         config.leaveBackground = 'custom';
-        await saveConfig(guildId, config);
-        
-        await patchWebhook(clientId, token, createEmbed(
-          'Custom Background Uploaded',
-          'Your custom leave background has been uploaded and set successfully.'
-        ));
+        await writeJSON(`guilds/${guildId}/config.json`, config);
+        await patchWebhook(clientId, token, createEmbed('Custom Background Uploaded', 'Your custom leave background is active.'));
       } catch (err) {
         console.error('[Leave Background Upload Error]:', err);
-        await patchWebhook(clientId, token, createEmbed(
-          'Upload Failed',
-          `Failed to upload background: ${err.message}`
-        ));
+        await patchWebhook(clientId, token, createEmbed('Upload Failed', `Error: ${err.message}`));
       }
       break;
-    }
-    
-    default: {
-      await patchWebhook(clientId, token, createEmbed(
-        'Unknown Subcommand',
-        `The subcommand \`${subcommand}\` was not recognized.`
-      ));
     }
   }
 }
