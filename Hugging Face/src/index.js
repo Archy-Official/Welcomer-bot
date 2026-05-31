@@ -3,29 +3,45 @@ import router from './router.js';
 
 const PORT = process.env.PORT || 7860;
 
-const server = http.createServer((req, res) => {
-  const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = urlObj.pathname;
-  
-  let bodyChunks = [];
-  req.on('data', chunk => { bodyChunks.push(chunk); });
-  
-  req.on('end', async () => {
-    const rawBody = Buffer.concat(bodyChunks).toString();
-    
-    try {
-      await router(req, res, pathname, rawBody);
-    } catch (err) {
-      console.error('[Critical Server Crash]:', err);
-      if (!res.writableEnded) {
-        res.setHeader('Content-Type', 'application/json');
-        res.writeHead(500);
-        res.end(JSON.stringify({ error: 'Internal Server Error Execution Fault' }));
+// Helper to reliably buffer stream payloads into a text string
+function getBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.setEncoding('utf8');
+    req.on('data', chunk => { data += chunk; });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = url.pathname;
+
+    // Standardize body tracking across HTTP methods
+    let body = null;
+    if (req.method === 'POST') {
+      const raw = await getBody(req);
+      if (raw.trim()) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Invalid JSON payload' }));
+        }
       }
     }
-  });
+
+    // Hand over context directly to the routing controller
+    await router(req, res, pathname, body);
+  } catch (err) {
+    console.error('[Runtime Exception Override]:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Internal Server Error' }));
+  }
 });
 
 server.listen(PORT, () => {
-  console.log(`[startup] Node.js ESM app server online via internal port ${PORT}`);
+  console.log(`[startup] Node.js ESM server live on port ${PORT}`);
 });
