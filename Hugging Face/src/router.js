@@ -3,16 +3,52 @@ import { getCached } from './storage/cache.js';
 import { generateWelcomeCard } from './canvas/welcomeCard.js';
 import { generateLeaveCard } from './canvas/leaveCard.js';
 
-export default async function router(req, res, pathname, body) {
-  // Safe helper to extract and parse string payload bodies if passed as text streams
-  const getParsedBody = () => {
-    if (!body) return {};
-    return typeof body === 'string' ? JSON.parse(body) : body;
-  };
+// Import command handlers
+import handleSetup from './commands/setup.js';
+import handleWelcomeMessage from './commands/welcome-message.js';
+import handleLeaveMessage from './commands/leave-message.js';
+import handleWelcomeBackground from './commands/welcome-background.js';
+import handleLeaveBackground from './commands/leave-background.js';
+import handlePreview from './commands/preview.js';
+import handleReset from './commands/reset.js';
 
+// Map command names to handlers
+const COMMAND_HANDLERS = {
+  'setup': handleSetup,
+  'welcome-message': handleWelcomeMessage,
+  'leave-message': handleLeaveMessage,
+  'welcome-background': handleWelcomeBackground,
+  'leave-background': handleLeaveBackground,
+  'preview': handlePreview,
+  'reset': handleReset
+};
+
+// Helper to send error embed via webhook
+async function sendErrorWebhook(clientId, token, errorMessage) {
+  const url = `https://discord.com/api/v10/webhooks/${clientId}/${token}/messages/@original`;
+  const payload = {
+    embeds: [{
+      title: 'Command Error',
+      description: `An error occurred: ${errorMessage}`,
+      color: 0xff0000,
+      timestamp: new Date().toISOString()
+    }]
+  };
+  try {
+    await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    console.error('[Webhook Error]:', err);
+  }
+}
+
+export default async function router(req, res, pathname, body) {
   const urlObj = new URL(req.url, 'http://localhost');
   const querySecret = urlObj.searchParams.get('secret');
-
+  
   // Secure Storage Test Endpoint
   if (pathname === '/test-storage' && req.method === 'GET') {
     res.setHeader('Content-Type', 'application/json');
@@ -21,7 +57,7 @@ export default async function router(req, res, pathname, body) {
         res.writeHead(401);
         return res.end(JSON.stringify({ error: 'Unauthorized test access' }));
       }
-
+      
       console.log('[Test] Starting Bucket Storage self-test...');
       const testPayload = { 
         status: "Success!", 
@@ -40,23 +76,51 @@ export default async function router(req, res, pathname, body) {
       return res.end(JSON.stringify({ storage_test: "FAILED", error: err.message }, null, 2));
     }
   }
-
-  // POST /interactions
+  
+  // POST /interactions - Discord slash command handler
   if (pathname === '/interactions' && req.method === 'POST') {
     res.setHeader('Content-Type', 'application/json');
+    
+    // Validate API secret
     const secret = process.env.API_SECRET;
     if (!secret || req.headers['x-api-secret'] !== secret) {
       res.writeHead(401);
       return res.end(JSON.stringify({ error: 'Unauthorized' }));
     }
-    res.writeHead(200);
-    return res.end(JSON.stringify({ ok: true }));
+    
+    // Parse body if needed
+    const interaction = typeof body === 'string' ? JSON.parse(body) : body;
+    
+    // Get command name and route to handler
+    const commandName = interaction.data?.name;
+    const handler = COMMAND_HANDLERS[commandName];
+    
+    if (!handler) {
+      const clientId = process.env.DISCORD_CLIENT_ID;
+      const token = interaction.token;
+      await sendErrorWebhook(clientId, token, `Unknown command: ${commandName}`);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true }));
+    }
+    
+    try {
+      await handler(interaction);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      console.error(`[Command Handler Error] ${commandName}:`, err);
+      const clientId = process.env.DISCORD_CLIENT_ID;
+      const token = interaction.token;
+      await sendErrorWebhook(clientId, token, err.message);
+      res.writeHead(200);
+      return res.end(JSON.stringify({ ok: true }));
+    }
   }
-
+  
   // POST /generate/welcome
   if (pathname === '/generate/welcome' && req.method === 'POST') {
     try {
-      const payload = getParsedBody();
+      const payload = typeof body === 'string' ? JSON.parse(body) : body;
       const imageBuffer = await generateWelcomeCard({
         avatarURL: payload.avatarURL,
         username: payload.username,
@@ -64,7 +128,7 @@ export default async function router(req, res, pathname, body) {
         memberCount: payload.memberCount,
         config: payload.config || {}
       });
-
+      
       res.setHeader('Content-Type', 'image/png');
       res.writeHead(200);
       return res.end(imageBuffer);
@@ -75,11 +139,11 @@ export default async function router(req, res, pathname, body) {
       return res.end(JSON.stringify({ error: 'Failed to generate welcome image asset', details: err.message }));
     }
   }
-
+  
   // POST /generate/leave
   if (pathname === '/generate/leave' && req.method === 'POST') {
     try {
-      const payload = getParsedBody();
+      const payload = typeof body === 'string' ? JSON.parse(body) : body;
       const imageBuffer = await generateLeaveCard({
         avatarURL: payload.avatarURL,
         username: payload.username,
@@ -88,7 +152,7 @@ export default async function router(req, res, pathname, body) {
         config: payload.config || {},
         guildId: payload.guildId || (payload.config && payload.config.guildId)
       });
-
+      
       res.setHeader('Content-Type', 'image/png');
       res.writeHead(200);
       return res.end(imageBuffer);
@@ -99,14 +163,15 @@ export default async function router(req, res, pathname, body) {
       return res.end(JSON.stringify({ error: 'Failed to generate leave image asset', details: err.message }));
     }
   }
-
+  
   // GET /health
   if (pathname === '/health' && req.method === 'GET') {
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(200);
     return res.end(JSON.stringify({ status: 'ok' }));
   }
-
+  
+  // 404 for unmatched routes
   res.setHeader('Content-Type', 'application/json');
   res.writeHead(404);
   return res.end(JSON.stringify({ error: 'Not Found' }));
