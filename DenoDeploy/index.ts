@@ -1,33 +1,44 @@
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   
-  // Extract path (e.g., /v10/webhooks/...) and target Discord API directly
-  const targetUrl = `https://discord.com/api${url.pathname}${url.search}`;
+  // 1. Target endpoint configuration
+  const TARGET_API = "https://discord.com/api"; 
+  const targetUrl = `${TARGET_API}${url.pathname}${url.search}`;
 
-  // Clone original request headers and strip host constraints
+  // 2. Clone headers and override Host to match the target environment
   const headers = new Headers(req.headers);
-  headers.delete("host");
+  headers.set("host", new URL(TARGET_API).host);
   headers.delete("origin");
 
   try {
-    // Forward full content payload body along with method signature
+    // 3. Extract the body stream safely for writing methods (POST, PATCH, PUT)
+    let requestBody: ReadableStream<Uint8Array> | null = null;
+    if (req.body && req.method !== "GET" && req.method !== "HEAD") {
+      requestBody = req.body;
+    }
+
+    // 4. Execute the upstream request
     const response = await fetch(targetUrl, {
       method: req.method,
       headers: headers,
-      body: req.method !== "GET" && req.method !== "HEAD" ? await req.blob() : null,
+      body: requestBody,
+      redirect: "manual",
     });
 
-    // Extract headers safely to avoid immutable constraints
+    // 5. Reconstruct response headers and attach open CORS permissions
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set("Access-Control-Allow-Origin", "*");
+    responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+    responseHeaders.set("Access-Control-Allow-Headers", "*");
 
+    // 6. Stream the payload directly back to your Hugging Face Space
     return new Response(response.body, {
       status: response.status,
       headers: responseHeaders,
     });
+
   } catch (error: any) {
+    console.error("[Proxy Fatal]:", error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
