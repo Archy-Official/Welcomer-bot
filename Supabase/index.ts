@@ -1,13 +1,23 @@
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   
-  // DYNAMIC REGEX FIX:
-  // Automatically strips "/functions/v1/super-endpoint" (or whatever the function is named)
-  // leaving clean trailing paths like "/v10/gateway" or "/v10/webhooks/..."
-  const cleanPath = url.pathname.replace(/^\/functions\/v1\/[^/]+/, "");
+  // 1. Pull the destination route from the query string (?route=/v10/gateway)
+  const routeParam = url.searchParams.get("route");
   
+  // Hybrid Fallback: Use the query param if it exists, otherwise fall back to path parsing
+  let cleanPath = routeParam || url.pathname.replace(/^\/functions\/v1\/[^/]+/, "");
+  if (!cleanPath.startsWith("/")) {
+    cleanPath = "/" + cleanPath;
+  }
+
+  // 2. Clean out the internal 'route' token so it isn't forwarded to Discord
+  const forwardSearch = new URLSearchParams(url.search);
+  forwardSearch.delete("route");
+  const searchString = forwardSearch.toString();
+
+  // 3. Assemble the authentic Discord destination URL
   const TARGET_API = "https://discord.com/api"; 
-  const targetUrl = `${TARGET_API}${cleanPath}${url.search}`;
+  const targetUrl = `${TARGET_API}${cleanPath}${searchString ? "?" + searchString : ""}`;
 
   const headers = new Headers(req.headers);
   headers.set("host", new URL(TARGET_API).host);
