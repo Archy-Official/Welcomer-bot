@@ -1,0 +1,14 @@
+{
+  "name": "welcome-gateway-bot",
+  "version": "1.0.0",
+  "description": "Gateway event listener optimized for high-availability edge networks",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "discord.js": "14.26.4",
+    "dotenv": "^16.4.5"
+  }
+}
