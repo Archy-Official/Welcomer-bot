@@ -8,8 +8,6 @@ import aiohttp
 import discord
 from dotenv import load_dotenv
 
-# Global configuration map state
-guild_config_cache = {}
 
 # ====================================================================
 # 🔌 NATIVE BACKGROUND HEALTHCHECK SERVER
@@ -26,11 +24,9 @@ class DiscloudHealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        # Prevent spamming your Discloud console logs with 200 OK polling messages
         return
 
 def start_health_server():
-    # Discloud automatically injects a PORT variable if needed, default to 8080
     port = int(os.getenv('PORT', 8080))
     def run():
         try:
@@ -52,7 +48,6 @@ def run_system_diagnostics():
     print('[System Diagnosis] Initiating Discloud Container Verification...', flush=True)
     print('==================================================', flush=True)
 
-    # Physical File System Check relative to the active working directory
     env_path = Path.cwd() / '.env'
     env_exists = env_path.exists()
 
@@ -71,7 +66,6 @@ def run_system_diagnostics():
     print('[Memory Check] Verifying Loaded Environment Variables:', flush=True)
     print('--------------------------------------------------', flush=True)
 
-    # Force load local structure if file exists, otherwise let container injection handle it
     if env_exists:
         load_dotenv(dotenv_path=env_path)
 
@@ -96,7 +90,6 @@ def run_system_diagnostics():
             print(f"❌ [EMPTY] os.getenv('{key}') contains an EMPTY string value", flush=True)
             missing_count += 1
         else:
-            # Mask value strings carefully for private logs
             masked_value = '***'
             if key in ['DISCORD_CLIENT_ID', 'HF_BUCKET_NAME', 'SERVICES_URL']:
                 masked_value = value
@@ -117,32 +110,54 @@ def run_system_diagnostics():
 
 
 # ====================================================================
-# 🗃️ REMOTE STORAGE ROUTER CONNECTOR
+# 📡 HF EVENT FORWARDER
+# Forwards member join/leave events to HF Space POST /internal/member-event.
+# HF reads guilds/{guildId}/config.json, generates the card, sends via proxy mesh.
+# No local config cache needed — HF handles the no_config case itself.
 # ====================================================================
-async def load_all_guild_configs():
+async def forward_member_event(event_type: str, member: discord.Member):
     services_url = os.getenv('SERVICES_URL')
+    api_secret   = os.getenv('API_SECRET', '')
+
     if not services_url:
-        print('[Cache Sync Fatal] Cannot pull configurations: SERVICES_URL variable is missing.', flush=True)
+        print(f"[Event Forward Fatal] SERVICES_URL missing — cannot forward {event_type} for {member.name}", flush=True)
         return
 
+    avatar_url = str(member.display_avatar.url) if member.display_avatar else None
+
+    payload = {
+        "event":       event_type,
+        "guildId":     str(member.guild.id),
+        "userId":      str(member.id),
+        "username":    member.name,
+        "globalName":  member.global_name,
+        "avatarUrl":   avatar_url,
+        "memberCount": member.guild.member_count,
+    }
+
     try:
-        print('[Cache Sync] Pulling remote configurations from Hugging Face Storage Matrix...', flush=True)
-        headers = {'x-api-secret': os.getenv('API_SECRET', '')}
-        
+        print(f"[Event Forward] Sending '{event_type}' for {member.name} ({member.id}) in {member.guild.name}...", flush=True)
+
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{services_url}/internal/guilds", headers=headers, timeout=10) as response:
+            async with session.post(
+                f"{services_url}/internal/member-event",
+                json=payload,
+                headers={
+                    'Content-Type': 'application/json',
+                    'x-api-secret': api_secret
+                },
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                body = await response.text()
                 if response.status == 200:
-                    guilds = await response.json()
-                    guild_config_cache.clear()
-                    for guild in guilds:
-                        guild_id = guild.get('guildId')
-                        if guild_id:
-                            guild_config_cache[str(guild_id)] = guild
-                    print(f"[Cache Sync] Successfully loaded {len(guild_config_cache)} target guild parameters.", flush=True)
+                    print(f"[Event Forward] ✅ HF acknowledged '{event_type}' for {member.name} — {body}", flush=True)
                 else:
-                    print(f"[Cache Sync Fail] API returned an error response: {response.status} {response.reason}", flush=True)
+                    print(f"[Event Forward Fail] HF returned {response.status} for '{event_type}': {body}", flush=True)
+
+    except asyncio.TimeoutError:
+        print(f"[Event Forward Timeout] HF did not respond for '{event_type}' event (member: {member.name})", flush=True)
     except Exception as error:
-        print(f"[Cache Sync Fatal] Connection link dropped to processing engine: {error}", flush=True)
+        print(f"[Event Forward Fatal] '{event_type}' for {member.name}: {error}", flush=True)
 
 
 # ====================================================================
@@ -150,49 +165,53 @@ async def load_all_guild_configs():
 # ====================================================================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.members = True
+intents.members = True  # Required for member join/leave events
 
 client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
     print(f"[Gateway Connected] Registered as operational identity: {client.user.name}", flush=True)
-    await load_all_guild_configs()
+    print(f"[System Ready] Monitoring {len(client.guilds)} guild(s).", flush=True)
+
 
 @client.event
-async def on_member_join(member):
+async def on_member_join(member: discord.Member):
     print(f"[Event] Member joined: {member.name} in server: {member.guild.name}", flush=True)
+    await forward_member_event("join", member)
+
 
 @client.event
-async def on_member_remove(member):
+async def on_member_remove(member: discord.Member):
     print(f"[Event] Member left: {member.name} from server: {member.guild.name}", flush=True)
+    await forward_member_event("leave", member)
+
 
 @client.event
-async def on_guild_join(guild):
+async def on_guild_join(guild: discord.Guild):
     print(f"[Event] Added to a new server cluster: {guild.name}", flush=True)
-    await load_all_guild_configs()
+
+
+@client.event
+async def on_guild_remove(guild: discord.Guild):
+    print(f"[Event] Removed from server: {guild.name}", flush=True)
 
 
 # ====================================================================
 # 🏁 MONOLITHIC ENTRYPOINT EXECUTION
 # ====================================================================
 def main():
-    # Pre-bind standard health servers
     start_health_server()
 
-    # Validate your credentials before touching Discord networks
     if not run_system_diagnostics():
         print("[Execution Stopped] Environment error found. Process terminating.", flush=True)
         sys.exit(1)
 
     token = os.getenv('DISCORD_TOKEN')
     print("[Single-Shot Activation] Attempting a strict one-time Discord gateway connection...", flush=True)
-    
+
     try:
-        # reconnect=False tells discord.py NEVER to catch connection dropping errors silently or auto-loop
         client.run(token, reconnect=False)
-        
-        # If execution unblocks gracefully without triggering an exception catch:
         print("[Gateway Terminated] Connection closed down cleanly without crashing.", flush=True)
         sys.exit(0)
 
@@ -202,7 +221,7 @@ def main():
         print(f"Details: {login_err}", flush=True)
         print("==================================================", flush=True)
         sys.exit(1)
-        
+
     except discord.errors.GatewayNotFound:
         print("\n==================================================", flush=True)
         print("🚨 [GATEWAY EXCEPTION] Discord web endpoint was unreachable or down.", flush=True)
@@ -213,9 +232,10 @@ def main():
         print("\n==================================================", flush=True)
         print("🚨 [FATAL PROTOCOL EXCEPTION] System caught a running socket level error:", flush=True)
         import traceback
-        traceback.print_exc(file=sys.stdout) # Direct layout pipe straight out to flush targets
+        traceback.print_exc(file=sys.stdout)
         print("==================================================", flush=True)
         sys.exit(1)
+
 
 if __name__ == '__main__':
     main()
