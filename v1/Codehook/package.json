@@ -1,0 +1,9 @@
+{
+  "name": "Archy-proxy",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "dependencies": {
+    "codehooks-js": "^1.2.20"
+  }
+}
