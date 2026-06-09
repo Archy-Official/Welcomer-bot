@@ -1,4 +1,4 @@
-# Archy Welcomer - V1
+# Archy Welcomer - V1.1
 
 A fully serverless Discord welcome/leave bot that runs across **five free-tier cloud platforms simultaneously** with no VPS, no monthly cost, and no single point of failure.
 
@@ -64,7 +64,7 @@ Member Joins or Leaves a Server
         │
         ▼
 ┌─────────────────────────┐
-│   Discloud Bot           │  ← Python discord.py, persistent WebSocket
+│   Discloud Bot          │  ← Python discord.py, persistent WebSocket
 │   main.py               │    on_member_join / on_member_remove
 └────────────┬────────────┘
              │ POST /internal/member-event
@@ -104,7 +104,7 @@ The priority order was determined by real-world latency testing, not guesswork:
 1. **Wispbyte** — fastest in practice, claims always-on, no per-request API limits (resource limits apply: 512MB RAM, 1GB storage, shared CPU). Server located in Romania.
 2. **Codehooks** — very reliable, ~60 requests/minute free tier limit.
 3. **Supabase** — solid fallback, ~500k requests/month on free tier.
-4. **Deno Deploy** — least consistent in testing, 10k requests/month on unverified accounts.
+4. **Deno Deploy** — least consistent in testing, 100k requests/month on unverified accounts.
 
 ### Why not Python for the HF Space from the start?
 
@@ -112,7 +112,7 @@ No specific technical blocker — Node.js felt like the natural choice for this 
 
 ### Why is there a Python file (`delete_helper.py`) inside a Node.js container?
 
-The `@huggingface/hub` JavaScript SDK does not implement the `batch_bucket_files` deletion API — it simply does not exist in the JS SDK yet. The Python `huggingface_hub` library does have it.
+The `@huggingface/hub` JavaScript SDK does not implement the bucket file deletion API — it simply does not exist in the JS SDK yet. The Python `huggingface_hub` library does have it.
 
 Rather than leave file deletion broken or blocked on the JS SDK's roadmap, a small Python bridge script was added. Node.js calls it via `child_process.execFile('python3', [...])`. The Python binary and `huggingface_hub` are installed in the Dockerfile for exactly this purpose. When the JS SDK eventually adds deletion support, this bridge gets removed.
 
@@ -136,13 +136,13 @@ HF bucket downloads redirect to **AWS S3** for the actual file transfer. If you 
 
 The Discord WebSocket gateway — which delivers `on_member_join` and `on_member_remove` events — requires a **persistent long-running process**. You cannot receive real-time gateway events from a serverless function that spins up on request.
 
-HF Spaces on the free tier hibernate after inactivity and cannot hold a WebSocket connection. Discloud is a hosting platform built specifically for Discord bots with a free tier, persistent process execution, and `autorestart=true` in the config so the bot recovers from crashes automatically.
+HF Spaces on the free tier hibernate after inactivity and cannot hold a WebSocket connection. Discloud is a hosting platform built specifically for Discord bots with a free tier, persistent process execution, and `AUTORESTART=true` in the config so the bot recovers from crashes automatically.
 
 The bot itself is intentionally minimal — it only listens for two gateway events and makes one HTTP POST per event.
 
 ### Why `reconnect=False` on the Discloud bot?
 
-This was left this way during a debugging phase to see exact gateway errors instead of letting discord.py silently retry in a loop. Discloud's `autorestart=true` handles process-level restarts independently.
+This was left this way during a debugging phase to see exact gateway errors instead of letting discord.py silently retry in a loop. Discloud's `AUTORESTART=true` handles process-level restarts independently.
 
 **This is a known issue and will be fixed in v2.** See the Known Issues section below.
 
@@ -173,7 +173,7 @@ The proxy pool has 4 fallback nodes. The Cloudflare Worker runs on global edge i
 ## Project Structure
 
 ```
-v1/
+V1.1/
 ├── Cloudflare/
 │   └── worker.js                    # Interaction gateway: signature verify + defer + forward
 │
@@ -185,10 +185,10 @@ v1/
 │   └── index.ts                     # Discord API proxy node (Deno / TypeScript)
 │
 ├── Supabase/
-│   └── index.ts                     # Discord API proxy node (Supabase Edge Function)
+│   └── index.ts                     # Discord API proxy node (Supabase Edge Function / Deno runtime)
 │
 ├── Wispbyte/
-│   ├── main.py                      # Discord API proxy node (Python FastAPI)
+│   ├── main.py                      # Discord API proxy node (Python / FastAPI)
 │   └── requirements.txt
 │
 ├── Discloud/
@@ -197,23 +197,23 @@ v1/
 │   ├── discloud.config              # Platform config (name, RAM, Python version, autorestart)
 │   └── .env.example                 # All required environment variables listed
 │
-├── Huggingface/
+├── Hugging Face/
 │   ├── Dockerfile                   # Alpine + Node 22 + build tools for skia-canvas
 │   ├── package.json
+│   ├── register-commands.py         # One-time script to register slash commands with Discord
 │   └── src/
 │       ├── index.js                 # HTTP server entrypoint on port 7860
 │       ├── router.js                # Route dispatcher for all API endpoints
 │       ├── canvas/
-│       │   ├── welcomeCard.js       # Generates 800x200 welcome image via skia-canvas
-│       │   └── leaveCard.js         # Generates 800x200 leave image via skia-canvas
+│       │   ├── welcomeCard.js       # Generates 800×200 welcome image via skia-canvas
+│       │   └── leaveCard.js         # Generates 800×200 leave image via skia-canvas
 │       ├── commands/
-│       │   ├── setup.js             # /setup (channels, autorole, dm subcommands)
-│       │   ├── welcome-message.js   # /welcome-message
-│       │   ├── leave-message.js     # /leave-message
-│       │   ├── welcome-background.js# /welcome-background
-│       │   ├── leave-background.js  # /leave-background
-│       │   ├── preview.js           # /preview
-│       │   └── reset.js             # /reset
+│       │   ├── setup.js             # /setup subcommands: channels, autorole, dm
+│       │   ├── background.js        # /background subcommands: default, upload, switch, delete, list
+│       │   ├── welcome-message.js   # /welcome-message subcommands: set, set-dm, preview
+│       │   ├── leave-message.js     # /leave-message subcommands: set, preview
+│       │   ├── preview.js           # /preview subcommands: welcome, leave
+│       │   └── reset.js             # /reset confirm
 │       ├── storage/
 │       │   ├── hfClient.js          # Read/write/delete to HF Bucket (dual-strategy reads)
 │       │   ├── cache.js             # In-memory TTL cache (5-minute default)
@@ -232,7 +232,7 @@ v1/
 ## Features
 
 - **Welcome & Leave Cards** — Generates 800×200px image cards with the member's avatar, username, server name, and member count using `skia-canvas`.
-- **Custom Backgrounds** — Upload your own background images per server (up to 6 custom slots per event type). Images are automatically center-cropped and resized to 800×200.
+- **Custom Backgrounds** — Upload your own background images per server (up to 10 custom slots shared across both card types). Images are automatically center-cropped and resized to 800×200.
 - **Three Built-in Default Backgrounds** — Bundled directly in the Docker image so they load instantly without a bucket read.
 - **Custom Messages** — Set the text message sent alongside the card. Supports `{username}`, `{server}`, and `{memberCount}` template variables.
 - **Auto-Roles** — Automatically assign up to 5 roles to new members on join.
@@ -311,7 +311,7 @@ Accounts needed before starting:
 
 1. Go to your HF profile → **New Space**. Set the SDK to **Docker**. Name it anything (e.g. `archy-welcomer`).
 2. In Space settings, make sure the port is set to `7860`.
-3. Upload all files from the `Huggingface/` folder into the Space repository (via git or the web UI).
+3. Upload all files from the `Hugging Face/` folder into the Space repository (via git or the web UI).
 
 **2c. Set Secrets in the Space**
 
@@ -407,7 +407,7 @@ API_SECRET=the-same-api-secret-used-everywhere
 3. Zip the entire contents of the `Discloud/` folder (including `.env`, `main.py`, `requirements.txt`, and `discloud.config`) into a single zip file.
 4. Upload it to Discloud via the dashboard under **Upload App**.
 5. Discloud reads `discloud.config` automatically and starts the bot with `python3 main.py`.
-6. In the Discloud dashboard logs you will see the diagnostics suite run, then `[Gateway Connected] Registered as operational identity: YourBotName`.
+6. In the Discloud dashboard logs you will see the diagnostics suite run, then `[gateway] Connected as YourBotName` followed by `[gateway] Watching N guild(s)`.
 
 > **Note:** `discloud.config` specifies `RAM=100` (MB). This is enough for the thin event-forwarding bot. Do not lower it.
 
@@ -417,19 +417,25 @@ API_SECRET=the-same-api-secret-used-everywhere
 
 The slash commands must be registered with Discord's API before users can run them. This is a one-time operation per deploy.
 
-Send a `PUT` request to `https://discord.com/api/v10/applications/{YOUR_CLIENT_ID}/commands` with your bot token in the `Authorization: Bot <token>` header and the full command definitions in the body.
+A ready-to-run script is included at `Hugging Face/register-commands.py`. Set three environment variables and run it:
 
-You can do this with `curl`, Postman, or a small one-off Node.js script using `discord.js`'s `REST` client. Register these commands:
+```bash
+DISCORD_BOT_TOKEN=your-token \
+DISCORD_APPLICATION_ID=your-application-id \
+DISCORD_GUILD_ID=your-guild-id \
+python3 register-commands.py
+```
+
+This registers the commands as **guild commands** for the specified server (instant propagation, good for testing). To register as **global commands** instead (available in all servers, takes up to 1 hour to propagate), change the URL in the script from the guild endpoint to the global endpoint by removing `/guilds/{GUILD_ID}` from the path.
+
+The following commands will be registered:
 
 - `/setup` — with subcommands: `channels`, `autorole-add`, `autorole-remove`, `autorole-list`, `dm`
-- `/welcome-message`
-- `/leave-message`
-- `/welcome-background`
-- `/leave-background`
-- `/preview`
-- `/reset`
-
-Register them as **global** commands (available in all servers, takes up to 1 hour to propagate) or as **guild** commands for a specific server (instant, good for testing).
+- `/background` — with subcommands: `default`, `upload`, `switch`, `delete`, `list`
+- `/welcome-message` — with subcommands: `set`, `set-dm`, `preview`
+- `/leave-message` — with subcommands: `set`, `preview`
+- `/preview` — with subcommands: `welcome`, `leave`
+- `/reset confirm`
 
 ---
 
@@ -444,13 +450,13 @@ Visit `https://yourusername-archy-welcomer.hf.space/test-storage?secret=YOUR_API
 Already verified when Discord accepted the Interactions Endpoint URL in Step 3. No extra check needed.
 
 **Test the Discloud Bot:**
-In the Discloud logs, confirm `[System Ready] Monitoring N guild(s).`
+In the Discloud logs, confirm `[gateway] Watching N guild(s).`
 
 **Test a slash command:**
-Run `/preview type:welcome` in a Discord server the bot is in. You should receive an ephemeral reply with a preview card within a few seconds. If the deferred message never resolves, check the HF Space logs for errors.
+Run `/preview welcome` in a Discord server the bot is in. You should receive an ephemeral reply with a preview card within a few seconds. If the deferred message never resolves, check the HF Space logs for errors.
 
 **Test a real join/leave:**
-Have a user join the server. Check HF Space logs for `[Member Event]` entries confirming the event arrived and the card was sent.
+Have a user join the server. Check HF Space logs for `[events]` entries confirming the event arrived and the card was sent.
 
 ---
 
@@ -500,12 +506,19 @@ All configuration commands require the **Manage Server** permission.
 | `/setup autorole-remove` | Remove a role from auto-assignment |
 | `/setup autorole-list` | List all currently configured auto-roles |
 | `/setup dm` | Enable or disable welcome DMs to new members |
-| `/welcome-message` | Set the welcome text. Supports `{username}`, `{server}`, `{memberCount}` |
-| `/leave-message` | Set the leave text. Same template variables |
-| `/welcome-background` | Upload, list, select, or delete custom welcome backgrounds |
-| `/leave-background` | Upload, list, select, or delete custom leave backgrounds |
-| `/preview` | Preview the current welcome or leave card without a real event |
-| `/reset` | Reset all server configuration to defaults |
+| `/welcome-message set` | Set the welcome text. Supports `{username}`, `{server}`, `{memberCount}` |
+| `/welcome-message set-dm` | Set the DM welcome text |
+| `/welcome-message preview` | Preview the current welcome message template |
+| `/leave-message set` | Set the leave text. Same template variables |
+| `/leave-message preview` | Preview the current leave message template |
+| `/background default` | Apply a built-in background style to the welcome card, leave card, or both |
+| `/background upload` | Upload a custom background image and assign it to a named slot |
+| `/background switch` | Switch the active background for a card to any existing slot |
+| `/background delete` | Delete a custom background slot |
+| `/background list` | List all background slots and current active backgrounds |
+| `/preview welcome` | Preview the current welcome card without a real event |
+| `/preview leave` | Preview the current leave card without a real event |
+| `/reset confirm` | Reset all server configuration to defaults |
 
 ---
 
@@ -519,9 +532,7 @@ guilds/
     ├── config.json
     └── assets/
         └── backgrounds/
-            ├── welcome/
-            │   └── {slotName}.png
-            └── leave/
+            └── shared/
                 └── {slotName}.png
 ```
 
@@ -539,8 +550,7 @@ A `config.json` looks like:
   "dmEnabled": false,
   "welcomeBackground": "default1",
   "leaveBackground": "default1",
-  "welcomeCustomBackgrounds": ["mybg"],
-  "leaveCustomBackgrounds": [],
+  "customBackgrounds": ["mybg"],
   "cardTextColor": "#ffffff",
   "cardAccentColor": "#5865F2",
   "createdAt": "2026-01-01T00:00:00.000Z"
@@ -554,9 +564,9 @@ A `config.json` looks like:
 Pull requests are welcome. For significant changes, open an issue first.
 
 **Adding a new slash command:**
-1. Create the handler in `Huggingface/src/commands/`.
+1. Create the handler in `Hugging Face/src/commands/`.
 2. Add it to the `COMMAND_HANDLERS` map in `router.js`.
-3. Register it with Discord's API (see Step 6).
+3. Add it to `register-commands.py` and re-run the script.
 
 **Adding a new proxy platform:**
 1. Create the proxy file in a new folder named after the platform.
@@ -571,4 +581,4 @@ Pull requests are welcome. For significant changes, open an issue first.
 
 **Created by [Archnemix](https://github.com/Archnemix).**
 
-This project is free to use. You may use, modify, fork, and deploy it for personal or public use at no cost. If you build something with it, a credit back is appreciated but not required.s
+This project is free to use. You may use, modify, fork, and deploy it for personal or public use at no cost. If you build something with it, a credit back is appreciated but not required.
