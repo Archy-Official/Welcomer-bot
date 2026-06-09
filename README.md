@@ -104,7 +104,7 @@ The priority order was determined by real-world latency testing, not guesswork:
 1. **Wispbyte** — fastest in practice, claims always-on, no per-request API limits (resource limits apply: 512MB RAM, 1GB storage, shared CPU). Server located in Romania.
 2. **Codehooks** — very reliable, ~60 requests/minute free tier limit.
 3. **Supabase** — solid fallback, ~500k requests/month on free tier.
-4. **Deno Deploy** — least consistent in testing, 100k requests/month on unverified accounts.
+4. **Deno Deploy** — least consistent in testing, 10k requests/month on unverified accounts.
 
 ### Why not Python for the HF Space from the start?
 
@@ -112,7 +112,7 @@ No specific technical blocker — Node.js felt like the natural choice for this 
 
 ### Why is there a Python file (`delete_helper.py`) inside a Node.js container?
 
-The `@huggingface/hub` JavaScript SDK does not implement the bucket file deletion API — it simply does not exist in the JS SDK yet. The Python `huggingface_hub` library does have it.
+The `@huggingface/hub` JavaScript SDK does not implement the `batch_bucket_files` deletion API — it simply does not exist in the JS SDK yet. The Python `huggingface_hub` library does have it.
 
 Rather than leave file deletion broken or blocked on the JS SDK's roadmap, a small Python bridge script was added. Node.js calls it via `child_process.execFile('python3', [...])`. The Python binary and `huggingface_hub` are installed in the Dockerfile for exactly this purpose. When the JS SDK eventually adds deletion support, this bridge gets removed.
 
@@ -140,11 +140,9 @@ HF Spaces on the free tier hibernate after inactivity and cannot hold a WebSocke
 
 The bot itself is intentionally minimal — it only listens for two gateway events and makes one HTTP POST per event.
 
-### Why `reconnect=False` on the Discloud bot?
+### Why `reconnect=True` on the Discloud bot?
 
-This was left this way during a debugging phase to see exact gateway errors instead of letting discord.py silently retry in a loop. Discloud's `AUTORESTART=true` handles process-level restarts independently.
-
-**This is a known issue and will be fixed in v2.** See the Known Issues section below.
+The discord.py client is set to automatically reconnect on WebSocket drops. This means transient network blips or routine Discord gateway restarts are handled gracefully at the socket level without relying on Discloud's process-level autorestart for what is essentially a recoverable connection event. Both layers are active — `reconnect=True` handles lightweight reconnects, `AUTORESTART=true` handles full process crashes.
 
 ### Why ephemeral deferred responses for slash commands?
 
@@ -155,9 +153,6 @@ All slash command responses use the `EPHEMERAL` flag (value `64`). Config feedba
 ## Known Issues — Planned for v2
 
 These are confirmed issues in the current version. None of them break core functionality but they are worth knowing about.
-
-**`reconnect=False` on the Discloud bot**
-The discord.py client is set to not automatically reconnect on WebSocket drops. This means a transient network blip or a routine Discord gateway restart will kill the bot connection and rely on Discloud's process-level autorestart instead of a lightweight socket reconnect. The fix is one character — `reconnect=True` — and will be in v2.
 
 **No timeout on `patchWebhook()`**
 `fetchViaProxy()` has a 4-second `AbortSignal.timeout` on every request. `patchWebhook()` does not. If a proxy node accepts the connection but hangs without responding, the entire command handler will stall indefinitely waiting for it. Under concurrent load this could pile up. A matching timeout will be added in v2.
@@ -170,10 +165,36 @@ The proxy pool has 4 fallback nodes. The Cloudflare Worker runs on global edge i
 
 ---
 
+## What Changed in V1.1
+
+### Unified background system
+
+V1.0 had two separate command handlers (`welcome-background.js` and `leave-background.js`) and two separate storage directories for custom backgrounds (`backgrounds/welcome/` and `backgrounds/leave/`). V1.1 merges these into a single `/background` command backed by a shared storage pool.
+
+**What changed:**
+
+- `welcome-background.js` and `leave-background.js` are replaced by a single `background.js`
+- `/welcome-background` and `/leave-background` slash commands are replaced by a single `/background` command with a `card_type` or `type` option on each subcommand
+- Custom backgrounds are stored at `guilds/{guildId}/assets/backgrounds/shared/{name}.png` instead of separate `welcome/` and `leave/` subdirectories
+- The config schema replaces `welcomeCustomBackgrounds` and `leaveCustomBackgrounds` arrays with a single `customBackgrounds` array shared across both card types
+- The custom slot limit increases from 6 per card type to **10 shared slots** across both cards
+- Migration logic in `background.js` automatically merges existing separate slot arrays into the new unified pool on first read
+- `welcomeCard.js` and `leaveCard.js` both now read from the shared path
+
+### `reconnect=True` on the Discloud bot
+
+The discord.py client now reconnects automatically on WebSocket drops instead of relying solely on `AUTORESTART` for connection recovery.
+
+### `register-commands.py` included
+
+A standalone Python script for registering all slash commands via the Discord API is now bundled in `Hugging Face/register-commands.py`. Set the three environment variables and run it once after each deploy.
+
+---
+
 ## Project Structure
 
 ```
-V1.1/
+v1.1/
 ├── Cloudflare/
 │   └── worker.js                    # Interaction gateway: signature verify + defer + forward
 │
@@ -185,10 +206,10 @@ V1.1/
 │   └── index.ts                     # Discord API proxy node (Deno / TypeScript)
 │
 ├── Supabase/
-│   └── index.ts                     # Discord API proxy node (Supabase Edge Function / Deno runtime)
+│   └── index.ts                     # Discord API proxy node (Supabase Edge Function)
 │
 ├── Wispbyte/
-│   ├── main.py                      # Discord API proxy node (Python / FastAPI)
+│   ├── main.py                      # Discord API proxy node (Python FastAPI)
 │   └── requirements.txt
 │
 ├── Discloud/
@@ -200,20 +221,20 @@ V1.1/
 ├── Hugging Face/
 │   ├── Dockerfile                   # Alpine + Node 22 + build tools for skia-canvas
 │   ├── package.json
-│   ├── register-commands.py         # One-time script to register slash commands with Discord
+│   ├── register-commands.py         # One-time slash command registration script
 │   └── src/
 │       ├── index.js                 # HTTP server entrypoint on port 7860
 │       ├── router.js                # Route dispatcher for all API endpoints
 │       ├── canvas/
-│       │   ├── welcomeCard.js       # Generates 800×200 welcome image via skia-canvas
-│       │   └── leaveCard.js         # Generates 800×200 leave image via skia-canvas
+│       │   ├── welcomeCard.js       # Generates 800x200 welcome image via skia-canvas
+│       │   └── leaveCard.js         # Generates 800x200 leave image via skia-canvas
 │       ├── commands/
-│       │   ├── setup.js             # /setup subcommands: channels, autorole, dm
-│       │   ├── background.js        # /background subcommands: default, upload, switch, delete, list
-│       │   ├── welcome-message.js   # /welcome-message subcommands: set, set-dm, preview
-│       │   ├── leave-message.js     # /leave-message subcommands: set, preview
-│       │   ├── preview.js           # /preview subcommands: welcome, leave
-│       │   └── reset.js             # /reset confirm
+│       │   ├── setup.js             # /setup (channels, autorole, dm subcommands)
+│       │   ├── welcome-message.js   # /welcome-message
+│       │   ├── leave-message.js     # /leave-message
+│       │   ├── background.js        # /background (unified welcome + leave backgrounds)
+│       │   ├── preview.js           # /preview
+│       │   └── reset.js             # /reset
 │       ├── storage/
 │       │   ├── hfClient.js          # Read/write/delete to HF Bucket (dual-strategy reads)
 │       │   ├── cache.js             # In-memory TTL cache (5-minute default)
@@ -358,8 +379,19 @@ Deploy at least one. Deploy all of them for maximum reliability. Each proxy rece
 **Wispbyte (Recommended Primary)**
 
 1. Create an account at [wispbyte.com](https://wispbyte.com).
-2. Deploy the `Wispbyte/` folder. Wispbyte injects `SERVER_PORT` automatically.
-3. Proxy URL: provided by the Wispbyte dashboard after deploy.
+2. Deploy the `Wispbyte/` folder. Wispbyte injects `SERVER_PORT` automatically — `main.py` reads it via `os.environ.get('SERVER_PORT', 8000)`.
+3. After deploying, Wispbyte gives you an IP address and port (e.g. `http://203.0.113.45:12333`). This is your Wispbyte proxy URL.
+4. Open `Hugging Face/src/utils/proxy.js`. The file detects Wispbyte URLs by checking for your port number. Find the two lines that reference `'12333'` and replace `12333` with whatever port Wispbyte assigned to you:
+
+```js
+// In prioritizePool():
+url => url.includes('YOUR_PORT'),
+
+// In buildProxyUrl():
+if (proxyBase.includes('supabase.co') || proxyBase.includes('YOUR_PORT')) {
+```
+
+5. Your Wispbyte proxy URL to use in `PROXY_POOL` is `http://YOUR_IP:YOUR_PORT`.
 
 **Codehooks**
 
@@ -385,7 +417,7 @@ Deploy at least one. Deploy all of them for maximum reliability. Each proxy rece
 **After deploying your proxies**, go back to your HF Space secrets and set `PROXY_POOL` to a comma-separated list of your proxy base URLs in priority order (left = tried first):
 
 ```
-PROXY_POOL=https://your-wispbyte-url,https://yourproject.api.codehooks.io/dev/proxy,https://yourproject.supabase.co/functions/v1/proxy,https://yourproject.deno.dev
+PROXY_POOL=http://YOUR_WISPBYTE_IP:YOUR_PORT,https://yourproject.api.codehooks.io/dev/proxy,https://yourproject.supabase.co/functions/v1/proxy,https://yourproject.deno.dev
 ```
 
 ---
@@ -407,7 +439,7 @@ API_SECRET=the-same-api-secret-used-everywhere
 3. Zip the entire contents of the `Discloud/` folder (including `.env`, `main.py`, `requirements.txt`, and `discloud.config`) into a single zip file.
 4. Upload it to Discloud via the dashboard under **Upload App**.
 5. Discloud reads `discloud.config` automatically and starts the bot with `python3 main.py`.
-6. In the Discloud dashboard logs you will see the diagnostics suite run, then `[gateway] Connected as YourBotName` followed by `[gateway] Watching N guild(s)`.
+6. In the Discloud dashboard logs you will see the diagnostics suite run, then `[gateway] Connected as YourBotName`.
 
 > **Note:** `discloud.config` specifies `RAM=100` (MB). This is enough for the thin event-forwarding bot. Do not lower it.
 
@@ -417,25 +449,25 @@ API_SECRET=the-same-api-secret-used-everywhere
 
 The slash commands must be registered with Discord's API before users can run them. This is a one-time operation per deploy.
 
-A ready-to-run script is included at `Hugging Face/register-commands.py`. Set three environment variables and run it:
+A registration script is included at `Hugging Face/register-commands.py`. Set these three environment variables and run it:
 
 ```bash
-DISCORD_BOT_TOKEN=your-token \
-DISCORD_APPLICATION_ID=your-application-id \
-DISCORD_GUILD_ID=your-guild-id \
+export DISCORD_BOT_TOKEN=your-bot-token
+export DISCORD_APPLICATION_ID=your-application-id
+export DISCORD_GUILD_ID=your-guild-id-for-testing   # omit to register globally
 python3 register-commands.py
 ```
 
-This registers the commands as **guild commands** for the specified server (instant propagation, good for testing). To register as **global commands** instead (available in all servers, takes up to 1 hour to propagate), change the URL in the script from the guild endpoint to the global endpoint by removing `/guilds/{GUILD_ID}` from the path.
+Guild commands register instantly and are good for testing. Global commands take up to 1 hour to propagate to all servers.
 
-The following commands will be registered:
+The script registers these commands:
 
 - `/setup` — with subcommands: `channels`, `autorole-add`, `autorole-remove`, `autorole-list`, `dm`
 - `/background` — with subcommands: `default`, `upload`, `switch`, `delete`, `list`
-- `/welcome-message` — with subcommands: `set`, `set-dm`, `preview`
-- `/leave-message` — with subcommands: `set`, `preview`
-- `/preview` — with subcommands: `welcome`, `leave`
-- `/reset confirm`
+- `/welcome-message`
+- `/leave-message`
+- `/preview`
+- `/reset`
 
 ---
 
@@ -511,11 +543,11 @@ All configuration commands require the **Manage Server** permission.
 | `/welcome-message preview` | Preview the current welcome message template |
 | `/leave-message set` | Set the leave text. Same template variables |
 | `/leave-message preview` | Preview the current leave message template |
-| `/background default` | Apply a built-in background style to the welcome card, leave card, or both |
-| `/background upload` | Upload a custom background image and assign it to a named slot |
-| `/background switch` | Switch the active background for a card to any existing slot |
+| `/background default` | Apply a built-in background style to welcome, leave, or both cards |
+| `/background upload` | Upload a custom background image to a named slot |
+| `/background switch` | Switch the active background for a specific card |
 | `/background delete` | Delete a custom background slot |
-| `/background list` | List all background slots and current active backgrounds |
+| `/background list` | List all background slots and which are active |
 | `/preview welcome` | Preview the current welcome card without a real event |
 | `/preview leave` | Preview the current leave card without a real event |
 | `/reset confirm` | Reset all server configuration to defaults |
@@ -573,7 +605,7 @@ Pull requests are welcome. For significant changes, open an issue first.
 2. The proxy must accept a `?route=` query parameter and forward it to `https://discord.com/api{route}`.
 3. All responses must include `Access-Control-Allow-Origin: *`.
 4. Update `prioritizePool()` in `proxy.js` to include the new platform's detection string.
-5. Update the URL construction blocks in both `patchWebhook()` and `fetchViaProxy()` in `proxy.js`.
+5. Update the URL construction logic in `buildProxyUrl()` in `proxy.js`.
 
 ---
 
