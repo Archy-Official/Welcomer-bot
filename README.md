@@ -104,7 +104,7 @@ The priority order was determined by real-world latency testing, not guesswork:
 1. **Wispbyte** — fastest in practice, claims always-on, no per-request API limits (resource limits apply: 512MB RAM, 1GB storage, shared CPU). Server located in Romania.
 2. **Codehooks** — very reliable, ~60 requests/minute free tier limit.
 3. **Supabase** — solid fallback, ~500k requests/month on free tier.
-4. **Deno Deploy** — least consistent in testing, 100k requests/month on unverified accounts.
+4. **Deno Deploy** — least consistent in testing, 10k requests/month on unverified accounts.
 
 ### Why not Python for the HF Space from the start?
 
