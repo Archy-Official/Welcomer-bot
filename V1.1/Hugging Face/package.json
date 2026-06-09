@@ -1,0 +1,13 @@
+{
+  "name": "hf-discord-edge-server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@huggingface/hub": "^2.10.5",
+    "discord.js": "14.26.4",
+    "skia-canvas": "latest"
+  }
+}
